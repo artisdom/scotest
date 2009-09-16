@@ -21,10 +21,11 @@
 
 #define BUFSIZE 2048
 
-static volatile int terminate = 0;
-static void sig_term(int sig) {
-	        terminate = 1;
-}
+struct sco_data {
+	int sd;
+	int fd;
+	int sco_mtu;
+};
 
 static int hci_up(int dd, int dev_id)
 {
@@ -388,6 +389,63 @@ static int sco_connect(bdaddr_t *src, bdaddr_t *dst,
 	return s;
 }
 
+void *read_rfcomm(void *arg) 
+{
+	unsigned char buf[BUFSIZE];
+	int rd, rlen;
+	
+	rd = *(int *)arg;
+
+	while (1) {
+		memset(buf, 0, sizeof(buf));
+		rlen = read(rd, buf, sizeof(buf));
+		if (rlen > 0) {
+			printf("%s\n", buf);
+			write(rd, "OK\r\n", 4);
+		}
+	}
+}
+
+void *write_sco(void *arg)
+{
+	unsigned char buf[BUFSIZE], *p;
+	struct sco_data *sco;
+	int sd, fd, sco_mtu;
+	int rlen, wlen, ret;
+	
+	sco = (struct sco_data *)arg;
+
+	sd = sco->sd;
+	fd = sco->fd;
+	sco_mtu = sco->sco_mtu;
+
+	while (1) {
+		memset(buf, 0, sizeof(buf));
+		rlen = read(sd, buf, sizeof(buf));
+		if (rlen > 0) {
+			rlen = read(fd, buf, rlen);
+			if (rlen <= 0) {
+				printf("send sco data end.\n");
+				ret = 0;
+				break;
+			}
+
+			wlen = 0;
+			p = buf;
+			while (rlen > sco_mtu) {
+				wlen += write(sd, p, sco_mtu);
+				rlen -= sco_mtu;
+				p += sco_mtu;
+			}
+			wlen += write(sd, p, rlen);
+		} else {
+			printf("read nothing from sco\n");
+			ret = -1;
+		}
+	}
+	pthread_exit(&ret);
+}
+
 static void usage(void) {
 	printf("Usage:\n"
 			"\tscotest <hciX> <pincode> <bdaddr> <file>\n");
@@ -395,16 +453,16 @@ static void usage(void) {
 
 int main(int argc, char *argv[])
 {
-	struct sigaction sa;
-
-	fd_set rfds;
-	struct timeval timeout;
 	unsigned char buf[2048], *p;
 	int maxfd, rlen, wlen;
 
 	int dev_id, dd, fd, rd, sd;
 	uint16_t sco_handle, sco_mtu;
 	bdaddr_t src, dst;
+
+	struct sco_data sco;
+	pthread_t rtid, stid;
+	int ret;
 
 	char *filename, pincode[5];
 
@@ -458,16 +516,6 @@ int main(int argc, char *argv[])
 	}
 	close(dd);
 
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_flags = SA_NOCLDSTOP;
-        sa.sa_handler = sig_term;
-        sigaction(SIGTERM, &sa, NULL);
-        sigaction(SIGINT,  &sa, NULL);
-
-        sa.sa_handler = SIG_IGN;
-        sigaction(SIGCHLD, &sa, NULL);
-        sigaction(SIGPIPE, &sa, NULL);
-
 	if ((rd = rfcomm_connect(&src, &dst)) < 0) {
 		exit(1);
 	}
@@ -479,51 +527,39 @@ int main(int argc, char *argv[])
 	fprintf(stderr, "SCO audio channel connected (handle %d, mtu %d)\n",
 			sco_handle, sco_mtu);
 
-	maxfd = (rd > sd) ? rd : sd;
-	while (!terminate) {
 
-		FD_ZERO(&rfds);
-		FD_SET(rd, &rfds);
-		FD_SET(sd, &rfds);
-
-		timeout.tv_sec = 0;
-		timeout.tv_usec = 10000;
-
-		if (select(maxfd + 1, &rfds, NULL, NULL, &timeout) > 0) {
-
-			if (FD_ISSET(rd, &rfds)) {
-				memset(buf, 0, sizeof(buf));
-				rlen = read(rd, buf, sizeof(buf));
-				if (rlen > 0) {
-					printf("%s\n", buf);
-					wlen = write(rd, "OK\r\n", 4);
-				}
-			}
-
-			if (FD_ISSET(sd, &rfds)) {
-				memset(buf, 0, sizeof(buf));
-				rlen = read(sd, buf, sizeof(buf));
-				if (rlen > 0) {
-					rlen = read(fd, buf, rlen);
-					if (rlen <= 0) {
-						printf("send sco data end.\n");
-						break;
-					}
-
-					wlen = 0;
-					p = buf;
-					while (rlen > sco_mtu) {
-						wlen += write(sd, p, sco_mtu);
-						rlen -= sco_mtu;
-						p += sco_mtu;
-					}
-					wlen += write(sd, p, rlen);
-				} else {
-					printf("read nothing from sco\n");
-				}
-			}
-		}
+	ret = pthread_create(&rtid, NULL, read_rfcomm, (void*)&rd);
+	if (ret) {
+		fprintf(stderr, "Can't create read_rfcomm thread:%s (%d)\n",
+				strerror(errno), errno);
+		close(rd);
+		close(sd);
+		exit(1);
 	}
+
+	memset(&sco, 0, sizeof(struct sco_data));
+	sco.fd = fd;
+	sco.sd = sd;
+	sco.sco_mtu = sco_mtu;
+
+	ret = pthread_create(&stid, NULL, write_sco, (void *)&sco);
+	if (ret) {
+		fprintf(stderr, "Can't create write_sco thread:%s (%d)\n",
+				strerror(errno), errno);
+		close(rd);
+		close(sd);
+		exit(1);
+	}
+
+	pthread_join(stid, (void *)&ret);
+	if (ret) {
+		fprintf(stderr, "send sco thread error:%s (%d)\n",
+				strerror(ret), ret);
+		exit(1);
+	}
+
+	pthread_kill(rtid, SIGKILL);
+
 
 	close(rd);
 	close(sd);

@@ -1,3 +1,3 @@
 CC=gcc
 all:
-	$(CC) scotest.c -o scotest -lbluetooth
+	$(CC) scotest.c -o scotest -lbluetooth -lpthread
