@@ -439,7 +439,6 @@ void *write_sco(void *arg)
 			wlen += write(sd, p, rlen);
 		} else {
 			printf("read nothing from sco\n");
-			break;
 		}
 	}
 }
