@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/socket.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/hci.h>
@@ -502,7 +503,7 @@ int main(int argc, char *argv[])
 
 			if (FD_ISSET(sd, &rfds)) {
 				memset(buf, 0, sizeof(buf));
-				rlen = read(sd, buf, sizeof(buf));
+				rlen = recv(sd, buf, sizeof(buf), 0);
 				if (rlen > 0) {
 					rlen = read(fd, buf, rlen);
 					if (rlen <= 0) {
@@ -513,11 +514,11 @@ int main(int argc, char *argv[])
 					wlen = 0;
 					p = buf;
 					while (rlen > sco_mtu) {
-						wlen += write(sd, p, sco_mtu);
+						wlen += send(sd, p, sco_mtu, 0);
 						rlen -= sco_mtu;
 						p += sco_mtu;
 					}
-					wlen += write(sd, p, rlen);
+					wlen += send(sd, p, rlen, 0);
 				} else {
 					printf("read nothing from sco\n");
 				}
