@@ -411,7 +411,7 @@ void *write_sco(void *arg)
 	unsigned char buf[BUFSIZE], *p;
 	struct sco_data *sco;
 	int sd, fd, sco_mtu;
-	int rlen, wlen, ret;
+	int rlen, wlen;
 	
 	sco = (struct sco_data *)arg;
 
@@ -426,7 +426,6 @@ void *write_sco(void *arg)
 			rlen = read(fd, buf, rlen);
 			if (rlen <= 0) {
 				printf("send sco data end.\n");
-				ret = 0;
 				break;
 			}
 
@@ -440,10 +439,9 @@ void *write_sco(void *arg)
 			wlen += write(sd, p, rlen);
 		} else {
 			printf("read nothing from sco\n");
-			ret = -1;
+			break;
 		}
 	}
-	pthread_exit(&ret);
 }
 
 static void usage(void) {
@@ -551,12 +549,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	pthread_join(stid, (void *)&ret);
-	if (ret) {
-		fprintf(stderr, "send sco thread error:%s (%d)\n",
-				strerror(ret), ret);
-		exit(1);
-	}
+	pthread_join(stid, NULL);
 
 	pthread_kill(rtid, SIGKILL);
 
